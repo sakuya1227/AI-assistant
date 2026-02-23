@@ -41,20 +41,35 @@ html, body {
 .typing-dots span:nth-child(3) { animation-delay: .4s; }
 @keyframes blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
 
-/* 音声ボタン点滅 */
 @keyframes pulse {
   0%,100% { box-shadow: 0 0 0 0 #f76aaa44; }
   50%      { box-shadow: 0 0 0 8px #f76aaa00; }
 }
 
-/* レイアウト */
+@keyframes slideIn {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+
+/* ── レイアウト ── */
 .app-layout {
   display: flex;
   height: 100dvh;
   overflow: hidden;
+  position: relative;
 }
 
-/* サイドバー */
+/* ── サイドバーオーバーレイ（スマホ用） ── */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #00000066;
+  z-index: 10;
+}
+.sidebar-overlay.open { display: block; }
+
+/* ── サイドバー ── */
 .sidebar {
   width: 260px;
   background: var(--surface);
@@ -62,7 +77,10 @@ html, body {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  z-index: 11;
+  transition: transform 0.25s ease;
 }
+
 .sidebar-header {
   padding: 20px 16px 12px;
   border-bottom: 1px solid var(--border);
@@ -137,12 +155,13 @@ html, body {
 }
 .settings-btn:hover { color: var(--text); }
 
-/* メインエリア */
+/* ── メインエリア ── */
 .main {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .command-banner {
@@ -161,6 +180,19 @@ html, body {
   align-items: center;
   gap: 12px;
   background: var(--surface);
+}
+.menu-btn {
+  display: none;
+  width: 36px; height: 36px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 16px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .ai-avatar {
   width: 36px; height: 36px;
@@ -338,4 +370,36 @@ html, body {
   font-family: inherit;
   font-weight: 700;
   cursor: pointer;
+}
+
+/* ── スマホ対応 ── */
+@media (max-width: 640px) {
+  /* サイドバーを画面外に隠す */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    height: 100dvh;
+    transform: translateX(-100%);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+    animation: slideIn 0.25s ease;
+  }
+
+  /* ハンバーガーボタンを表示 */
+  .menu-btn { display: flex; }
+
+  /* メッセージの最大幅を広げる */
+  .msg-row { max-width: 92%; }
+
+  /* 入力エリアのパディング調整 */
+  .input-area { padding: 12px 12px; gap: 8px; }
+  .messages   { padding: 14px; gap: 12px; }
+
+  /* バブルフォントサイズ調整 */
+  .bubble { font-size: 13px; padding: 10px 14px; }
+
+  /* ヘッダー調整 */
+  .chat-header { padding: 12px 14px; }
 }
