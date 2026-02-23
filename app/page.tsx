@@ -21,10 +21,12 @@ interface Config {
   age?:      number | null;
   gender?:   string | null;
   memo?:     string | null;
+  password?: string;
 }
 
 const MAX_RECENT_TURNS  = 10;
 const MAX_SUMMARY_COUNT = 5;
+const DEFAULT_PASSWORD  = 'ai-assistant';
 
 function esc(t: string) {
   return String(t)
@@ -34,7 +36,79 @@ function esc(t: string) {
     .replace(/\n/g, '<br>');
 }
 
+// ── パスワード画面 ────────────────────────────────────────
+function PasswordScreen({ onAuth }: { onAuth: () => void }) {
+  const [pw,    setPw]    = useState('');
+  const [error, setError] = useState(false);
+
+  const submit = () => {
+    const savedCfg  = JSON.parse(localStorage.getItem('config') || '{}') as Config;
+    const correct   = savedCfg.password || DEFAULT_PASSWORD;
+    if (pw === correct) {
+      onAuth();
+    } else {
+      setError(true);
+      setPw('');
+      setTimeout(() => setError(false), 2000);
+    }
+  };
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '100dvh', background: '#0f0f1a',
+    }}>
+      <div style={{
+        background: '#171728', border: '1px solid #2a2a45', borderRadius: 18,
+        padding: '40px 36px', width: 340, maxWidth: '90vw', textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 40, marginBottom: 16 }}>🌸</div>
+        <h1 style={{
+          fontSize: 18, fontWeight: 700, marginBottom: 8,
+          background: 'linear-gradient(135deg, #7c6af7, #f76aaa)',
+          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+        }}>
+          AI アシスタント
+        </h1>
+        <p style={{ fontSize: 12, color: '#7070a0', marginBottom: 28 }}>
+          パスワードを入力してください
+        </p>
+        <input
+          type="password"
+          value={pw}
+          onChange={e => setPw(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && submit()}
+          placeholder="パスワード"
+          autoFocus
+          style={{
+            width: '100%', background: '#1e1e32',
+            border: `1px solid ${error ? '#f76aaa' : '#2a2a45'}`,
+            borderRadius: 10, padding: '10px 14px', color: '#e8e8f0',
+            fontFamily: 'inherit', fontSize: 14, outline: 'none',
+            marginBottom: 12, textAlign: 'center', letterSpacing: '0.2em',
+            transition: 'border-color 0.2s',
+          }}
+        />
+        {error && (
+          <p style={{ fontSize: 12, color: '#f76aaa', marginBottom: 12 }}>
+            パスワードが違うよ…
+          </p>
+        )}
+        <button onClick={submit} style={{
+          width: '100%', padding: '10px', border: 'none', borderRadius: 10,
+          background: 'linear-gradient(135deg, #7c6af7, #f76aaa)',
+          color: 'white', fontFamily: 'inherit', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+        }}>
+          ログイン
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── メインアプリ ──────────────────────────────────────────
 export default function Home() {
+  const [authed,       setAuthed]       = useState(false);
   const [sessions,     setSessions]     = useState<Session[]>([]);
   const [currentIdx,   setCurrentIdx]   = useState<number>(-1);
   const [cfg,          setCfg]          = useState<Config>({});
@@ -52,6 +126,9 @@ export default function Home() {
   const [sAge,      setSAge]      = useState('');
   const [sGender,   setSGender]   = useState('');
   const [sMemo,     setSMemo]     = useState('');
+  const [sPassword, setSPassword] = useState('');
+  const [sPasswordConfirm, setSPasswordConfirm] = useState('');
+  const [pwChangeError, setPwChangeError] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const voiceRef       = useRef(false);
@@ -60,32 +137,34 @@ export default function Home() {
   const currentIdxRef  = useRef<number>(-1);
   const cfgRef         = useRef<Config>({});
 
-  // refを常に最新に同期
   useEffect(() => { sessionsRef.current   = sessions;   }, [sessions]);
   useEffect(() => { currentIdxRef.current = currentIdx; }, [currentIdx]);
   useEffect(() => { cfgRef.current        = cfg;        }, [cfg]);
 
-  // ── 初期化 ────────────────────────────────────────────
-  useEffect(() => {
+  const makeNewSession = (): Session => ({
+    id: Date.now(), title: '新しいセッション', messages: [], summary: null, createdAt: new Date().toISOString(),
+  });
+
+  const initApp = useCallback(() => {
     const savedSessions = JSON.parse(localStorage.getItem('sessions') || '[]') as Session[];
     const savedCfg      = JSON.parse(localStorage.getItem('config')   || '{}') as Config;
     setCfg(savedCfg);
     cfgRef.current = savedCfg;
     if (savedSessions.length === 0) {
       const s = makeNewSession();
-      setSessions([s]);
-      sessionsRef.current = [s];
-      setCurrentIdx(0);
-      currentIdxRef.current = 0;
+      setSessions([s]); sessionsRef.current = [s];
+      setCurrentIdx(0); currentIdxRef.current = 0;
       localStorage.setItem('sessions', JSON.stringify([s]));
     } else {
-      setSessions(savedSessions);
-      sessionsRef.current = savedSessions;
-      setCurrentIdx(0);
-      currentIdxRef.current = 0;
+      setSessions(savedSessions); sessionsRef.current = savedSessions;
+      setCurrentIdx(0); currentIdxRef.current = 0;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleAuth = useCallback(() => {
+    setAuthed(true);
+    initApp();
+  }, [initApp]);
 
   // ── PC接続確認 ────────────────────────────────────────
   const checkPcStatus = useCallback(async () => {
@@ -96,51 +175,35 @@ export default function Home() {
       );
       const data = await res.json();
       setPcConnected(!!data.ok);
-    } catch {
-      setPcConnected(false);
-    }
+    } catch { setPcConnected(false); }
   }, []);
 
   useEffect(() => {
+    if (!authed) return;
     checkPcStatus();
     const t = setInterval(checkPcStatus, 30000);
     return () => clearInterval(t);
-  }, [checkPcStatus]);
+  }, [checkPcStatus, authed]);
 
-  // メッセージ末尾スクロール
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [sessions, currentIdx, isLoading]);
 
   // ── ヘルパー ──────────────────────────────────────────
-  const makeNewSession = (): Session => ({
-    id: Date.now(),
-    title: '新しいセッション',
-    messages: [],
-    summary: null,
-    createdAt: new Date().toISOString(),
-  });
-
   const saveSessions = (next: Session[]) => {
-    setSessions([...next]);
-    sessionsRef.current = [...next];
+    setSessions([...next]); sessionsRef.current = [...next];
     localStorage.setItem('sessions', JSON.stringify(next));
   };
 
   const newSession = () => {
     const s = makeNewSession();
     const updated = [s, ...sessionsRef.current];
-    saveSessions(updated);
-    setCurrentIdx(0);
-    currentIdxRef.current = 0;
+    saveSessions(updated); setCurrentIdx(0); currentIdxRef.current = 0;
   };
 
   const autoSummarize = (s: Session, all: Session[]) => {
     if (s.messages.length >= 20 && !s.summary) {
-      const slice = s.messages
-        .slice(0, 10)
-        .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.content}`)
-        .join('\n');
+      const slice = s.messages.slice(0, 10).map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.content}`).join('\n');
       s.summary = slice.slice(0, 200) + '...';
       saveSessions([...all]);
     }
@@ -155,8 +218,7 @@ export default function Home() {
   };
 
   const showCommandBanner = (msg: string) => {
-    setCommandMsg(msg);
-    setTimeout(() => setCommandMsg(null), 3000);
+    setCommandMsg(msg); setTimeout(() => setCommandMsg(null), 3000);
   };
 
   // ── ELYZAへ送信 ──────────────────────────────────────
@@ -166,65 +228,41 @@ export default function Home() {
     if (!url) {
       const updated = [...currentSessions];
       updated[idx].messages.push({ role: 'assistant', content: 'Modal URLが設定されていないよ！設定から入力してね。' });
-      saveSessions(updated);
-      return;
+      saveSessions(updated); return;
     }
-
-    const recentMsgs = s.messages
-      .slice(0, -1)
-      .slice(-MAX_RECENT_TURNS)
-      .map(m => ({ role: m.role, content: m.content }));
-
-    const summaries = currentSessions
-      .filter((ss, i) => i !== idx && ss.summary)
-      .slice(0, MAX_SUMMARY_COUNT)
-      .map(ss => ss.summary as string);
+    const recentMsgs = s.messages.slice(0, -1).slice(-MAX_RECENT_TURNS).map(m => ({ role: m.role, content: m.content }));
+    const summaries  = currentSessions.filter((ss, i) => i !== idx && ss.summary).slice(0, MAX_SUMMARY_COUNT).map(ss => ss.summary as string);
 
     setIsLoading(true);
     try {
       const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chat_history:      recentMsgs,
-          session_summaries: summaries,
-          user_input:        userInput,
-          user_profile: {
-            name:   cfgRef.current.name   || null,
-            age:    cfgRef.current.age    || null,
-            gender: cfgRef.current.gender || null,
-            memo:   cfgRef.current.memo   || null,
-          },
+          chat_history: recentMsgs, session_summaries: summaries, user_input: userInput,
+          user_profile: { name: cfgRef.current.name||null, age: cfgRef.current.age||null, gender: cfgRef.current.gender||null, memo: cfgRef.current.memo||null },
         }),
       });
       const data  = await res.json();
       const reply = data.response || '（返答なし）';
       const updated = [...currentSessions];
       updated[idx].messages.push({ role: 'assistant', content: reply });
-      autoSummarize(updated[idx], updated);
-      saveSessions(updated);
+      autoSummarize(updated[idx], updated); saveSessions(updated);
     } catch {
       const updated = [...currentSessions];
       updated[idx].messages.push({ role: 'assistant', content: '接続エラーが発生しちゃった…Modal URLを確認してね。' });
       saveSessions(updated);
-    } finally {
-      setIsLoading(false);
-    }
+    } finally { setIsLoading(false); }
   };
 
   // ── ユーザー入力処理 ──────────────────────────────────
   const handleUserInput = useCallback(async (text: string) => {
     let idx = currentIdxRef.current;
     let currentSessions = [...sessionsRef.current];
-
     if (idx < 0) {
       const s = makeNewSession();
       currentSessions = [s, ...currentSessions];
-      idx = 0;
-      setCurrentIdx(0);
-      currentIdxRef.current = 0;
+      idx = 0; setCurrentIdx(0); currentIdxRef.current = 0;
     }
-
     const updated = [...currentSessions];
     updated[idx] = { ...updated[idx], messages: [...updated[idx].messages, { role: 'user', content: text }] };
     if (updated[idx].title === '新しいセッション' && updated[idx].messages.length === 1) {
@@ -232,7 +270,6 @@ export default function Home() {
     }
     saveSessions(updated);
 
-    // PC側で分類
     try {
       const cls = await pcPost('/api/classify', { text });
       if (cls && cls.label !== 'chat' && cls.label !== 'hearsay' && cls.parsed) {
@@ -240,8 +277,7 @@ export default function Home() {
         showCommandBanner(exec?.message || '実行しました');
         const updated2 = [...sessionsRef.current];
         updated2[idx] = { ...updated2[idx], messages: [...updated2[idx].messages, { role: 'assistant', content: `「${text}」を実行したよ！` }] };
-        saveSessions(updated2);
-        return;
+        saveSessions(updated2); return;
       }
     } catch { /* PC未接続でも続行 */ }
 
@@ -249,28 +285,21 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── メッセージ送信 ────────────────────────────────────
   const sendMessage = async () => {
     const text = inputText.trim();
     if (!text || isLoading) return;
     setInputText('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     await handleUserInput(text);
   };
 
-  // ── 音声入力 ──────────────────────────────────────────
   const pollVoice = useCallback(async () => {
     if (!voiceRef.current) return;
     try {
       const data = await pcPost('/api/voice-pipeline', {});
       if (data.text) {
-        if (data.action === 'command') {
-          showCommandBanner(data.message);
-        } else {
-          await handleUserInput(data.text);
-        }
+        if (data.action === 'command') showCommandBanner(data.message);
+        else await handleUserInput(data.text);
       }
     } catch { /* PC未接続 */ }
     if (voiceRef.current) setTimeout(pollVoice, 500);
@@ -278,28 +307,37 @@ export default function Home() {
   }, [handleUserInput]);
 
   const toggleVoice = () => {
-    if (!isVoiceMode) {
-      voiceRef.current = true;
-      setIsVoiceMode(true);
-      pollVoice();
-    } else {
-      voiceRef.current = false;
-      setIsVoiceMode(false);
-    }
+    if (!isVoiceMode) { voiceRef.current = true; setIsVoiceMode(true); pollVoice(); }
+    else              { voiceRef.current = false; setIsVoiceMode(false); }
   };
 
   // ── 設定 ──────────────────────────────────────────────
   const openSettings = () => {
-    setSPcUrl(cfg.pcUrl    || 'http://localhost:7860');
+    setSPcUrl(cfg.pcUrl || 'http://localhost:7860');
     setSModalUrl(cfg.modalUrl || '');
-    setSName(cfg.name     || '');
-    setSAge(cfg.age       ? String(cfg.age) : '');
+    setSName(cfg.name || '');
+    setSAge(cfg.age ? String(cfg.age) : '');
     setSGender(cfg.gender || '');
-    setSMemo(cfg.memo     || '');
+    setSMemo(cfg.memo || '');
+    setSPassword('');
+    setSPasswordConfirm('');
+    setPwChangeError('');
     setShowSettings(true);
   };
 
   const saveSettings = () => {
+    // パスワード変更チェック
+    if (sPassword || sPasswordConfirm) {
+      if (sPassword.length < 4) {
+        setPwChangeError('パスワードは4文字以上にしてね');
+        return;
+      }
+      if (sPassword !== sPasswordConfirm) {
+        setPwChangeError('パスワードが一致しないよ');
+        return;
+      }
+    }
+
     const newCfg: Config = {
       pcUrl:    sPcUrl    || 'http://localhost:7860',
       modalUrl: sModalUrl || '',
@@ -307,21 +345,23 @@ export default function Home() {
       age:      sAge ? parseInt(sAge) : null,
       gender:   sGender   || null,
       memo:     sMemo     || null,
+      password: sPassword ? sPassword : (cfg.password || DEFAULT_PASSWORD),
     };
-    setCfg(newCfg);
-    cfgRef.current = newCfg;
+    setCfg(newCfg); cfgRef.current = newCfg;
     localStorage.setItem('config', JSON.stringify(newCfg));
-    setShowSettings(false);
-    checkPcStatus();
+    setShowSettings(false); checkPcStatus();
   };
+
+  // ── パスワード画面 ────────────────────────────────────
+  if (!authed) return <PasswordScreen onAuth={handleAuth} />;
 
   const currentSession = sessions[currentIdx] || null;
 
-  // ── レンダリング ──────────────────────────────────────
+  // ── メイン画面 ────────────────────────────────────────
   return (
     <div className="app-layout">
 
-      {/* ── サイドバー ── */}
+      {/* サイドバー */}
       <nav className="sidebar">
         <div className="sidebar-header">
           <h1>✦ AI アシスタント</h1>
@@ -329,11 +369,8 @@ export default function Home() {
         </div>
         <div className="session-list">
           {sessions.map((s, i) => (
-            <div
-              key={s.id}
-              className={`session-item ${i === currentIdx ? 'active' : ''}`}
-              onClick={() => { setCurrentIdx(i); currentIdxRef.current = i; }}
-            >
+            <div key={s.id} className={`session-item ${i === currentIdx ? 'active' : ''}`}
+              onClick={() => { setCurrentIdx(i); currentIdxRef.current = i; }}>
               <div className="session-title">{s.title}</div>
               <div className="session-date">
                 {new Date(s.createdAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -346,15 +383,10 @@ export default function Home() {
         </div>
       </nav>
 
-      {/* ── メインエリア ── */}
+      {/* メインエリア */}
       <div className="main">
+        {commandMsg && <div className="command-banner">⚡ {commandMsg}</div>}
 
-        {/* コマンドバナー */}
-        {commandMsg && (
-          <div className="command-banner">⚡ {commandMsg}</div>
-        )}
-
-        {/* ヘッダー */}
         <div className="chat-header">
           <div className="ai-avatar">🌸</div>
           <div className="chat-header-info">
@@ -365,7 +397,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* メッセージ一覧 */}
         <div className="messages">
           {!currentSession && (
             <div style={{ color: 'var(--muted)', textAlign: 'center', marginTop: 40 }}>
@@ -393,13 +424,8 @@ export default function Home() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* 入力エリア */}
         <div className="input-area">
-          <button
-            className={`input-btn voice-btn ${isVoiceMode ? 'listening' : ''}`}
-            onClick={toggleVoice}
-            title="音声入力"
-          >
+          <button className={`input-btn voice-btn ${isVoiceMode ? 'listening' : ''}`} onClick={toggleVoice} title="音声入力">
             {isVoiceMode ? '⏹' : '🎤'}
           </button>
           <textarea
@@ -413,24 +439,13 @@ export default function Home() {
               e.target.style.height = 'auto';
               e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
             }}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
           />
-          <button
-            className="input-btn send-btn"
-            onClick={sendMessage}
-            disabled={isLoading || !inputText.trim()}
-          >
-            ➤
-          </button>
+          <button className="input-btn send-btn" onClick={sendMessage} disabled={isLoading || !inputText.trim()}>➤</button>
         </div>
       </div>
 
-      {/* ── 設定モーダル ── */}
+      {/* 設定モーダル */}
       {showSettings && (
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
           <div className="modal-panel" onClick={e => e.stopPropagation()}>
@@ -454,7 +469,7 @@ export default function Home() {
             </div>
             <div className="field">
               <label>年齢</label>
-              <input type="number" value={sAge} onChange={e => setSAge(e.target.value)} placeholder="例: 22" min={1} max={120} />
+              <input type="number" value={sAge} onChange={e => setSAge(e.target.value)} placeholder="例: 22" />
             </div>
             <div className="field">
               <label>性別</label>
@@ -470,9 +485,26 @@ export default function Home() {
               <textarea value={sMemo} onChange={e => setSMemo(e.target.value)} placeholder="例: ゲームが好き、夜型人間" />
             </div>
 
+            <hr style={{ borderColor: 'var(--border)', margin: '16px 0' }} />
+
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10, fontWeight: 700, letterSpacing: '.05em' }}>
+              🔑 パスワード変更（変更しない場合は空欄のまま）
+            </div>
+            <div className="field">
+              <label>新しいパスワード</label>
+              <input type="password" value={sPassword} onChange={e => { setSPassword(e.target.value); setPwChangeError(''); }} placeholder="4文字以上" />
+            </div>
+            <div className="field">
+              <label>パスワード確認</label>
+              <input type="password" value={sPasswordConfirm} onChange={e => { setSPasswordConfirm(e.target.value); setPwChangeError(''); }} placeholder="もう一度入力" />
+            </div>
+            {pwChangeError && (
+              <div style={{ fontSize: 12, color: '#f76aaa', marginBottom: 8 }}>{pwChangeError}</div>
+            )}
+
             <div className="modal-btns">
               <button className="btn-cancel" onClick={() => setShowSettings(false)}>キャンセル</button>
-              <button className="btn-save"   onClick={saveSettings}>保存</button>
+              <button className="btn-save" onClick={saveSettings}>保存</button>
             </div>
           </div>
         </div>
