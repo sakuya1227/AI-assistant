@@ -1,0 +1,482 @@
+'use client';
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+// ── 型定義 ────────────────────────────────────────────────
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+interface Session {
+  id: number;
+  title: string;
+  messages: Message[];
+  summary: string | null;
+  createdAt: string;
+}
+interface Config {
+  pcUrl?:    string;
+  modalUrl?: string;
+  name?:     string | null;
+  age?:      number | null;
+  gender?:   string | null;
+  memo?:     string | null;
+}
+
+const MAX_RECENT_TURNS  = 10;
+const MAX_SUMMARY_COUNT = 5;
+
+function esc(t: string) {
+  return String(t)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+}
+
+export default function Home() {
+  const [sessions,     setSessions]     = useState<Session[]>([]);
+  const [currentIdx,   setCurrentIdx]   = useState<number>(-1);
+  const [cfg,          setCfg]          = useState<Config>({});
+  const [isVoiceMode,  setIsVoiceMode]  = useState(false);
+  const [isLoading,    setIsLoading]    = useState(false);
+  const [pcConnected,  setPcConnected]  = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [commandMsg,   setCommandMsg]   = useState<string | null>(null);
+  const [inputText,    setInputText]    = useState('');
+
+  // 設定フォーム
+  const [sPcUrl,    setSPcUrl]    = useState('http://localhost:7860');
+  const [sModalUrl, setSModalUrl] = useState('');
+  const [sName,     setSName]     = useState('');
+  const [sAge,      setSAge]      = useState('');
+  const [sGender,   setSGender]   = useState('');
+  const [sMemo,     setSMemo]     = useState('');
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const voiceRef       = useRef(false);
+  const textareaRef    = useRef<HTMLTextAreaElement>(null);
+  const sessionsRef    = useRef<Session[]>([]);
+  const currentIdxRef  = useRef<number>(-1);
+  const cfgRef         = useRef<Config>({});
+
+  // refを常に最新に同期
+  useEffect(() => { sessionsRef.current   = sessions;   }, [sessions]);
+  useEffect(() => { currentIdxRef.current = currentIdx; }, [currentIdx]);
+  useEffect(() => { cfgRef.current        = cfg;        }, [cfg]);
+
+  // ── 初期化 ────────────────────────────────────────────
+  useEffect(() => {
+    const savedSessions = JSON.parse(localStorage.getItem('sessions') || '[]') as Session[];
+    const savedCfg      = JSON.parse(localStorage.getItem('config')   || '{}') as Config;
+    setCfg(savedCfg);
+    cfgRef.current = savedCfg;
+    if (savedSessions.length === 0) {
+      const s = makeNewSession();
+      setSessions([s]);
+      sessionsRef.current = [s];
+      setCurrentIdx(0);
+      currentIdxRef.current = 0;
+      localStorage.setItem('sessions', JSON.stringify([s]));
+    } else {
+      setSessions(savedSessions);
+      sessionsRef.current = savedSessions;
+      setCurrentIdx(0);
+      currentIdxRef.current = 0;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── PC接続確認 ────────────────────────────────────────
+  const checkPcStatus = useCallback(async () => {
+    try {
+      const res = await fetch(
+        (cfgRef.current.pcUrl || 'http://localhost:7860') + '/api/status',
+        { signal: AbortSignal.timeout(2000) }
+      );
+      const data = await res.json();
+      setPcConnected(!!data.ok);
+    } catch {
+      setPcConnected(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkPcStatus();
+    const t = setInterval(checkPcStatus, 30000);
+    return () => clearInterval(t);
+  }, [checkPcStatus]);
+
+  // メッセージ末尾スクロール
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [sessions, currentIdx, isLoading]);
+
+  // ── ヘルパー ──────────────────────────────────────────
+  const makeNewSession = (): Session => ({
+    id: Date.now(),
+    title: '新しいセッション',
+    messages: [],
+    summary: null,
+    createdAt: new Date().toISOString(),
+  });
+
+  const saveSessions = (next: Session[]) => {
+    setSessions([...next]);
+    sessionsRef.current = [...next];
+    localStorage.setItem('sessions', JSON.stringify(next));
+  };
+
+  const newSession = () => {
+    const s = makeNewSession();
+    const updated = [s, ...sessionsRef.current];
+    saveSessions(updated);
+    setCurrentIdx(0);
+    currentIdxRef.current = 0;
+  };
+
+  const autoSummarize = (s: Session, all: Session[]) => {
+    if (s.messages.length >= 20 && !s.summary) {
+      const slice = s.messages
+        .slice(0, 10)
+        .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.content}`)
+        .join('\n');
+      s.summary = slice.slice(0, 200) + '...';
+      saveSessions([...all]);
+    }
+  };
+
+  const pcPost = async (path: string, body: object) => {
+    const res = await fetch(
+      (cfgRef.current.pcUrl || 'http://localhost:7860') + path,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    );
+    return res.json();
+  };
+
+  const showCommandBanner = (msg: string) => {
+    setCommandMsg(msg);
+    setTimeout(() => setCommandMsg(null), 3000);
+  };
+
+  // ── ELYZAへ送信 ──────────────────────────────────────
+  const sendToElyza = async (userInput: string, currentSessions: Session[], idx: number) => {
+    const s   = currentSessions[idx];
+    const url = cfgRef.current.modalUrl || '';
+    if (!url) {
+      const updated = [...currentSessions];
+      updated[idx].messages.push({ role: 'assistant', content: 'Modal URLが設定されていないよ！設定から入力してね。' });
+      saveSessions(updated);
+      return;
+    }
+
+    const recentMsgs = s.messages
+      .slice(0, -1)
+      .slice(-MAX_RECENT_TURNS)
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const summaries = currentSessions
+      .filter((ss, i) => i !== idx && ss.summary)
+      .slice(0, MAX_SUMMARY_COUNT)
+      .map(ss => ss.summary as string);
+
+    setIsLoading(true);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_history:      recentMsgs,
+          session_summaries: summaries,
+          user_input:        userInput,
+          user_profile: {
+            name:   cfgRef.current.name   || null,
+            age:    cfgRef.current.age    || null,
+            gender: cfgRef.current.gender || null,
+            memo:   cfgRef.current.memo   || null,
+          },
+        }),
+      });
+      const data  = await res.json();
+      const reply = data.response || '（返答なし）';
+      const updated = [...currentSessions];
+      updated[idx].messages.push({ role: 'assistant', content: reply });
+      autoSummarize(updated[idx], updated);
+      saveSessions(updated);
+    } catch {
+      const updated = [...currentSessions];
+      updated[idx].messages.push({ role: 'assistant', content: '接続エラーが発生しちゃった…Modal URLを確認してね。' });
+      saveSessions(updated);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ── ユーザー入力処理 ──────────────────────────────────
+  const handleUserInput = useCallback(async (text: string) => {
+    let idx = currentIdxRef.current;
+    let currentSessions = [...sessionsRef.current];
+
+    if (idx < 0) {
+      const s = makeNewSession();
+      currentSessions = [s, ...currentSessions];
+      idx = 0;
+      setCurrentIdx(0);
+      currentIdxRef.current = 0;
+    }
+
+    const updated = [...currentSessions];
+    updated[idx] = { ...updated[idx], messages: [...updated[idx].messages, { role: 'user', content: text }] };
+    if (updated[idx].title === '新しいセッション' && updated[idx].messages.length === 1) {
+      updated[idx].title = text.slice(0, 20) + (text.length > 20 ? '…' : '');
+    }
+    saveSessions(updated);
+
+    // PC側で分類
+    try {
+      const cls = await pcPost('/api/classify', { text });
+      if (cls && cls.label !== 'chat' && cls.label !== 'hearsay' && cls.parsed) {
+        const exec = await pcPost('/api/execute', { objects: cls.parsed.objects, main_verbs: cls.parsed.main_verbs });
+        showCommandBanner(exec?.message || '実行しました');
+        const updated2 = [...sessionsRef.current];
+        updated2[idx] = { ...updated2[idx], messages: [...updated2[idx].messages, { role: 'assistant', content: `「${text}」を実行したよ！` }] };
+        saveSessions(updated2);
+        return;
+      }
+    } catch { /* PC未接続でも続行 */ }
+
+    await sendToElyza(text, sessionsRef.current, idx);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── メッセージ送信 ────────────────────────────────────
+  const sendMessage = async () => {
+    const text = inputText.trim();
+    if (!text || isLoading) return;
+    setInputText('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+    await handleUserInput(text);
+  };
+
+  // ── 音声入力 ──────────────────────────────────────────
+  const pollVoice = useCallback(async () => {
+    if (!voiceRef.current) return;
+    try {
+      const data = await pcPost('/api/voice-pipeline', {});
+      if (data.text) {
+        if (data.action === 'command') {
+          showCommandBanner(data.message);
+        } else {
+          await handleUserInput(data.text);
+        }
+      }
+    } catch { /* PC未接続 */ }
+    if (voiceRef.current) setTimeout(pollVoice, 500);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleUserInput]);
+
+  const toggleVoice = () => {
+    if (!isVoiceMode) {
+      voiceRef.current = true;
+      setIsVoiceMode(true);
+      pollVoice();
+    } else {
+      voiceRef.current = false;
+      setIsVoiceMode(false);
+    }
+  };
+
+  // ── 設定 ──────────────────────────────────────────────
+  const openSettings = () => {
+    setSPcUrl(cfg.pcUrl    || 'http://localhost:7860');
+    setSModalUrl(cfg.modalUrl || '');
+    setSName(cfg.name     || '');
+    setSAge(cfg.age       ? String(cfg.age) : '');
+    setSGender(cfg.gender || '');
+    setSMemo(cfg.memo     || '');
+    setShowSettings(true);
+  };
+
+  const saveSettings = () => {
+    const newCfg: Config = {
+      pcUrl:    sPcUrl    || 'http://localhost:7860',
+      modalUrl: sModalUrl || '',
+      name:     sName     || null,
+      age:      sAge ? parseInt(sAge) : null,
+      gender:   sGender   || null,
+      memo:     sMemo     || null,
+    };
+    setCfg(newCfg);
+    cfgRef.current = newCfg;
+    localStorage.setItem('config', JSON.stringify(newCfg));
+    setShowSettings(false);
+    checkPcStatus();
+  };
+
+  const currentSession = sessions[currentIdx] || null;
+
+  // ── レンダリング ──────────────────────────────────────
+  return (
+    <div className="app-layout">
+
+      {/* ── サイドバー ── */}
+      <nav className="sidebar">
+        <div className="sidebar-header">
+          <h1>✦ AI アシスタント</h1>
+          <button className="new-session-btn" onClick={newSession}>＋ 新しいセッション</button>
+        </div>
+        <div className="session-list">
+          {sessions.map((s, i) => (
+            <div
+              key={s.id}
+              className={`session-item ${i === currentIdx ? 'active' : ''}`}
+              onClick={() => { setCurrentIdx(i); currentIdxRef.current = i; }}
+            >
+              <div className="session-title">{s.title}</div>
+              <div className="session-date">
+                {new Date(s.createdAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="sidebar-footer">
+          <button className="settings-btn" onClick={openSettings}>⚙ 設定</button>
+        </div>
+      </nav>
+
+      {/* ── メインエリア ── */}
+      <div className="main">
+
+        {/* コマンドバナー */}
+        {commandMsg && (
+          <div className="command-banner">⚡ {commandMsg}</div>
+        )}
+
+        {/* ヘッダー */}
+        <div className="chat-header">
+          <div className="ai-avatar">🌸</div>
+          <div className="chat-header-info">
+            <h2>ELYZA</h2>
+            <div className={`pc-status ${pcConnected ? 'connected' : ''}`}>
+              {pcConnected ? 'PC接続済み ✓' : 'PC未接続'}
+            </div>
+          </div>
+        </div>
+
+        {/* メッセージ一覧 */}
+        <div className="messages">
+          {!currentSession && (
+            <div style={{ color: 'var(--muted)', textAlign: 'center', marginTop: 40 }}>
+              セッションを選択または作成してください
+            </div>
+          )}
+          {currentSession?.messages.map((m, i) => {
+            const isUser = m.role === 'user';
+            return (
+              <div key={i} className={`msg-row ${isUser ? 'user' : 'ai'}`}>
+                {!isUser && <div className="msg-avatar">🌸</div>}
+                <div className="bubble" dangerouslySetInnerHTML={{ __html: esc(m.content) }} />
+                {isUser && <div className="msg-avatar">👤</div>}
+              </div>
+            );
+          })}
+          {isLoading && (
+            <div className="msg-row ai">
+              <div className="msg-avatar">🌸</div>
+              <div className="bubble">
+                <div className="typing-dots"><span/><span/><span/></div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* 入力エリア */}
+        <div className="input-area">
+          <button
+            className={`input-btn voice-btn ${isVoiceMode ? 'listening' : ''}`}
+            onClick={toggleVoice}
+            title="音声入力"
+          >
+            {isVoiceMode ? '⏹' : '🎤'}
+          </button>
+          <textarea
+            ref={textareaRef}
+            className="text-input"
+            value={inputText}
+            placeholder="メッセージを入力…"
+            rows={1}
+            onChange={e => {
+              setInputText(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+              }
+            }}
+          />
+          <button
+            className="input-btn send-btn"
+            onClick={sendMessage}
+            disabled={isLoading || !inputText.trim()}
+          >
+            ➤
+          </button>
+        </div>
+      </div>
+
+      {/* ── 設定モーダル ── */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal-panel" onClick={e => e.stopPropagation()}>
+            <h3>⚙ 設定</h3>
+
+            <div className="field">
+              <label>PC サーバーURL</label>
+              <input type="text" value={sPcUrl} onChange={e => setSPcUrl(e.target.value)} placeholder="http://localhost:7860" />
+              <div className="hint">pc_server.py の起動URLを入力</div>
+            </div>
+            <div className="field">
+              <label>Modal API URL</label>
+              <input type="text" value={sModalUrl} onChange={e => setSModalUrl(e.target.value)} placeholder="https://xxx.modal.run/chat" />
+            </div>
+
+            <hr style={{ borderColor: 'var(--border)', margin: '16px 0' }} />
+
+            <div className="field">
+              <label>あなたの名前</label>
+              <input type="text" value={sName} onChange={e => setSName(e.target.value)} placeholder="例: 翔" />
+            </div>
+            <div className="field">
+              <label>年齢</label>
+              <input type="number" value={sAge} onChange={e => setSAge(e.target.value)} placeholder="例: 22" min={1} max={120} />
+            </div>
+            <div className="field">
+              <label>性別</label>
+              <select value={sGender} onChange={e => setSGender(e.target.value)}>
+                <option value="">未設定</option>
+                <option value="男性">男性</option>
+                <option value="女性">女性</option>
+                <option value="その他">その他</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>メモ（趣味・特記など）</label>
+              <textarea value={sMemo} onChange={e => setSMemo(e.target.value)} placeholder="例: ゲームが好き、夜型人間" />
+            </div>
+
+            <div className="modal-btns">
+              <button className="btn-cancel" onClick={() => setShowSettings(false)}>キャンセル</button>
+              <button className="btn-save"   onClick={saveSettings}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
