@@ -130,8 +130,6 @@ export default function Home() {
     try {
       const res  = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ chat_history:recentMsgs, session_summaries:summaries, user_input:userInput, user_profile:{name:cfgRef.current.name||null,age:cfgRef.current.age||null,gender:cfgRef.current.gender||null,memo:cfgRef.current.memo||null} }) });
       const data = await res.json();
-      // 最新のAPIレスポンスをlocalStorageに保存（/testページで確認用）
-      localStorage.setItem('last_api_response', JSON.stringify(data));
       const u=[...currentSessions]; u[idx].messages.push({role:'assistant',content:data.response||'（返答なし）'});
       autoSummarize(u[idx],u); saveSessions(u);
     } catch { const u=[...currentSessions]; u[idx].messages.push({role:'assistant',content:'接続エラーが発生しちゃった…Modal URLを確認してね。'}); saveSessions(u); }
@@ -193,8 +191,10 @@ export default function Home() {
   return (
     <div className="app-layout">
 
+      {/* スマホ用オーバーレイ */}
       <div className={`sidebar-overlay ${sidebarOpen?'open':''}`} onClick={()=>setSidebarOpen(false)} />
 
+      {/* サイドバー */}
       <nav className={`sidebar ${sidebarOpen?'open':''}`}>
         <div className="sidebar-header">
           <h1>✦ AI アシスタント</h1>
@@ -213,10 +213,12 @@ export default function Home() {
         </div>
       </nav>
 
+      {/* メインエリア */}
       <div className="main">
         {commandMsg && <div className="command-banner">⚡ {commandMsg}</div>}
 
         <div className="chat-header">
+          {/* ハンバーガーボタン（スマホのみ表示） */}
           <button className="menu-btn" onClick={()=>setSidebarOpen(!sidebarOpen)}>☰</button>
           <div className="ai-avatar">🌸</div>
           <div className="chat-header-info">
@@ -250,6 +252,7 @@ export default function Home() {
         </div>
       </div>
 
+      {/* 設定モーダル */}
       {showSettings && (
         <div className="modal-overlay" onClick={()=>setShowSettings(false)}>
           <div className="modal-panel" onClick={e=>e.stopPropagation()}>
